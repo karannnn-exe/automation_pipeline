@@ -1,0 +1,38 @@
+name: Terraform Plan
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to plan (dev, preprod, prod)'
+        required: true
+
+jobs:
+  terraform-plan:
+    runs-on: self-hosted
+    timeout-minutes: 2
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set environment
+        run: echo "ENV=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
+
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets[format('ROLE_ARN_%s', env.ENV)] }}
+          aws-region: us-east-1
+
+      - name: Select backend for environment
+        run: cp terraform/envs/backend_${{ env.ENV }}.tf terraform/backend.tf
+
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init 
+
+      - name: Terraform Plan
+        working-directory: terraform
+        run: terraform plan -var-file="envs/${ENV}.tfvars" -input=false -no-color
