@@ -6,16 +6,13 @@ on:
       environment:
         description: 'Environment to apply (dev, preprod, prod)'
         required: true
-        type: choice
-        options:
-        - dev
-        - preprod  
-        - prod
 
 jobs:
-  terraform-plan:
+  terraform-plan-and-apply:
     runs-on: self-hosted
-    timeout-minutes: 5
+    timeout-minutes: 15
+    environment: 
+      name: ${{ github.event.inputs.environment }}-approval
 
     steps:
       - name: Checkout code
@@ -40,33 +37,6 @@ jobs:
       - name: Terraform Plan
         working-directory: terraform
         run: terraform plan -var-file="envs/${ENV}.tfvars" -input=false -no-color
-
-  terraform-apply:
-    needs: terraform-plan
-    runs-on: self-hosted
-    timeout-minutes: 5
-    environment: 
-      name: ${{ github.event.inputs.environment }}-approval
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Set environment
-        run: echo "ENV=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
-
-      - name: Configure AWS Credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          role-to-assume: ${{ secrets[format('ROLE_ARN_%s', env.ENV)] }}
-          aws-region: us-east-1
-
-      - name: Select backend for environment
-        run: cp terraform/envs/backend_${{ env.ENV }}.tf terraform/backend.tf
-
-      - name: Terraform Init
-        working-directory: terraform
-        run: terraform init
 
       - name: Terraform Apply
         working-directory: terraform
