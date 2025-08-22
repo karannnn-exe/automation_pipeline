@@ -4,31 +4,37 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Environment to apply (dev, preprod, prod)'
+        description: 'Select Environment'
         required: true
+        type: choice
+        options:
+          - dev
+          - preprod
+          - prod
 
 jobs:
-  terraform-plan-and-apply:
+  terraform-plan:
     runs-on: self-hosted
     timeout-minutes: 15
-    environment: 
-      name: ${{ github.event.inputs.environment }}-approval
+    outputs:
+      env: ${{ steps.set-env.outputs.env }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
       - name: Set environment
-        run: echo "ENV=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
+        id: set-env
+        run: echo "env=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
 
       - name: Configure AWS Credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          role-to-assume: ${{ secrets[format('ROLE_ARN_%s', env.ENV)] }}
+          role-to-assume: ${{ secrets[format('ROLE_ARN_%s', github.event.inputs.environment)] }}
           aws-region: us-east-1
 
       - name: Select backend for environment
-        run: cp terraform/envs/backend_${{ env.ENV }}.tf terraform/backend.tf
+        run: cp terraform/envs/backend_${{ github.event.inputs.environment }}.tf terraform/backend.tf
 
       - name: Terraform Init
         working-directory: terraform
@@ -36,8 +42,39 @@ jobs:
 
       - name: Terraform Plan
         working-directory: terraform
-        run: terraform plan -var-file="envs/${ENV}.tfvars" -input=false -no-color
+        run: terraform plan -var-file="envs/${{ github.event.inputs.environment }}.tfvars" -input=false -no-color
+
+  approval:
+    needs: terraform-plan
+    runs-on: self-hosted
+    environment:
+      name: ${{ needs.terraform-plan.outputs.env }}-approval
+    steps:
+      - name: Await manual approval
+        run: echo "Waiting for manual approval in environment protection"
+
+  terraform-apply:
+    needs: approval
+    runs-on: self-hosted
+    timeout-minutes: 15
+    if: ${{ needs.approval.result == 'success' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets[format('ROLE_ARN_%s', github.event.inputs.environment)] }}
+          aws-region: us-east-1
+
+      - name: Select backend for environment
+        run: cp terraform/envs/backend_${{ github.event.inputs.environment }}.tf terraform/backend.tf
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init 
 
       - name: Terraform Apply
         working-directory: terraform
-        run: terraform apply -var-file="envs/${ENV}.tfvars" -input=false -no-color -auto-approve
+        run: terraform apply -var-file="envs/${{ github.event.inputs.environment }}.tfvars" -input=false -no-color -auto-approve
