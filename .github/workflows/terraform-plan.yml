@@ -54,7 +54,7 @@ jobs:
           role-to-assume: ${{ secrets[format('ROLE_ARN_%s', env.ENV)] }}
           aws-region: us-east-1
 
-      # Select backend
+      # Select backend for environment
       - name: Select backend for environment
         run: cp terraform/envs/backend_${{ env.ENV }}.tf terraform/backend.tf
 
