@@ -34,7 +34,9 @@ jobs:
             echo "ENV=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
             echo "Environment set from manual input: ${{ github.event.inputs.environment }}"
           else
-            CHANGED=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
+            # Compare PR head branch with base branch to detect changed files
+            CHANGED=$(git fetch origin ${{ github.event.pull_request.base.ref }} --depth=1 && \
+                      git diff --name-only origin/${{ github.event.pull_request.base.ref }} ${{ github.head_ref }})
 
             # Detect .tfvars change
             ENV=$(echo "$CHANGED" | grep '^terraform/envs/.*\.tfvars' | head -n1 | sed 's|terraform/envs/||;s|.tfvars||')
