@@ -33,16 +33,36 @@ jobs:
           role-to-assume: ${{ secrets[format('ROLE_ARN_%s', github.event.inputs.environment)] }}
           aws-region: us-east-1
 
+      - name: Cache Terraform plugins
+        uses: actions/cache@v3
+        with:
+          path: ~/.terraform.d/plugin-cache
+          key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}
+
       - name: Select backend for environment
         run: cp terraform/envs/backend_${{ github.event.inputs.environment }}.tf terraform/backend.tf
 
       - name: Terraform Init
         working-directory: terraform
-        run: terraform init 
+        run: terraform init -input=false
 
-      - name: Terraform Plan
+      - name: Terraform Format Check
         working-directory: terraform
-        run: terraform plan -var-file="envs/${{ github.event.inputs.environment }}.tfvars" -input=false -no-color
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Validate
+        working-directory: terraform
+        run: terraform validate
+
+      - name: Terraform Plan (Generate Plan File)
+        working-directory: terraform
+        run: terraform plan -var-file="envs/${{ github.event.inputs.environment }}.tfvars" -out=tfplan -input=false -no-color
+
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: terraform/tfplan
 
   approval:
     needs: terraform-plan
@@ -51,12 +71,12 @@ jobs:
       name: ${{ needs.terraform-plan.outputs.env }}-approval
     steps:
       - name: Await manual approval
-        run: echo "Waiting for manual approval in environment protection"
+        run: echo "Waiting for manual approval via environment protection"
 
   terraform-apply:
     needs: approval
     runs-on: self-hosted
-    timeout-minutes: 15
+    timeout-minutes: 30
     if: ${{ needs.approval.result == 'success' }}
     steps:
       - name: Checkout code
@@ -68,13 +88,33 @@ jobs:
           role-to-assume: ${{ secrets[format('ROLE_ARN_%s', github.event.inputs.environment)] }}
           aws-region: us-east-1
 
+      - name: Cache Terraform plugins
+        uses: actions/cache@v3
+        with:
+          path: ~/.terraform.d/plugin-cache
+          key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}
+
       - name: Select backend for environment
         run: cp terraform/envs/backend_${{ github.event.inputs.environment }}.tf terraform/backend.tf
 
       - name: Terraform Init
         working-directory: terraform
-        run: terraform init 
+        run: terraform init -input=false
 
-      - name: Terraform Apply
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: terraform/
+
+      - name: Terraform Apply (Approved Plan)
         working-directory: terraform
-        run: terraform apply -var-file="envs/${{ github.event.inputs.environment }}.tfvars" -input=false -no-color -auto-approve
+        run: terraform apply tfplan -input=false -no-color -auto-approve
+
+      - name: Notify on Success
+        if: success()
+        run: echo "Terraform Apply completed successfully for ${{ github.event.inputs.environment }}"
+
+      - name: Notify on Failure
+        if: failure()
+        run: echo "Terraform Apply failed for ${{ github.event.inputs.environment }}"
