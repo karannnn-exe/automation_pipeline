@@ -73,10 +73,9 @@ jobs:
 
             # Configure AWS credentials dynamically per environment
             ROLE_ARN_SECRET="ROLE_ARN_${ENV}"
-            echo "Assuming role from secret: $ROLE_ARN_SECRET"
-            aws-actions/configure-aws-credentials@v2
-            aws configure set region us-east-1
+            echo "Using secret: $ROLE_ARN_SECRET"
             export AWS_ROLE_ARN="${{ secrets[ROLE_ARN_SECRET] }}"
+            aws configure set region us-east-1
 
             # Select backend
             cp terraform/envs/backend_${ENV}.tf terraform/backend.tf
