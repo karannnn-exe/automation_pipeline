@@ -17,7 +17,7 @@ on:
 jobs:
   terraform-plan:
     runs-on: self-hosted
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       # Checkout code
@@ -26,7 +26,7 @@ jobs:
         with:
           ref: ${{ github.head_ref || github.ref_name }}
 
-      # Set environment: PR detection or manual input
+      # Set environment(s): PR detection or manual input
       - name: Set environment
         id: set_env
         run: |
@@ -34,18 +34,21 @@ jobs:
             echo "ENV=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
             echo "Environment set from manual input: ${{ github.event.inputs.environment }}"
           else
-            ENV=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} \
-              | grep '^terraform/envs/' \
-              | grep '.tfvars' \
-              | head -n1 \
-              | sed 's|terraform/envs/||;s|.tfvars||')
-            if [ -z "$ENV" ]; then
-              echo "No environment detected from PR, defaulting to dev"
-              ENV=dev
+            CHANGED=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
+
+            # Detect .tfvars change
+            ENV=$(echo "$CHANGED" | grep '^terraform/envs/.*\.tfvars' | head -n1 | sed 's|terraform/envs/||;s|.tfvars||')
+
+            if [ -n "$ENV" ]; then
+              echo "ENV=$ENV" >> $GITHUB_ENV
+              echo "Environment detected from changed .tfvars: $ENV"
+            elif echo "$CHANGED" | grep -q '^terraform/.*\.tf$'; then
+              echo "ENV=all" >> $GITHUB_ENV
+              echo "Core Terraform file changed, planning all environments"
+            else
+              echo "No relevant environment detected. Exiting workflow."
+              exit 1
             fi
-            echo "ENV=$ENV" >> $GITHUB_ENV
-            echo "Environment detected from PR: $ENV"
-          fi
 
       # Configure AWS credentials
       - name: Configure AWS Credentials via OIDC
@@ -54,9 +57,14 @@ jobs:
           role-to-assume: ${{ secrets[format('ROLE_ARN_%s', env.ENV)] }}
           aws-region: us-east-1
 
-      # Select backend for environment
+      # Select backend
       - name: Select backend for environment
-        run: cp terraform/envs/backend_${{ env.ENV }}.tf terraform/backend.tf
+        run: |
+          if [ "$ENV" = "all" ]; then
+            echo "Planning all environments; backend will be selected per environment during loop"
+          else
+            cp terraform/envs/backend_${{ env.ENV }}.tf terraform/backend.tf
+          fi
 
       # Terraform Init
       - name: Terraform Init
@@ -65,10 +73,19 @@ jobs:
           rm -rf .terraform
           terraform init
 
-      # Terraform Plan (capture text output)
+      # Terraform Plan
       - name: Terraform Plan
         working-directory: terraform
-        run: terraform plan -var-file="envs/${ENV}.tfvars" -input=false -no-color | tee plan.txt
+        run: |
+          if [ "$ENV" = "all" ]; then
+            for E in dev preprod prod; do
+              echo "==> Planning environment: $E"
+              cp terraform/envs/backend_${E}.tf terraform/backend.tf
+              terraform plan -var-file="envs/${E}.tfvars" -input=false -no-color | tee "plan_${E}.txt"
+            done
+          else
+            terraform plan -var-file="envs/${ENV}.tfvars" -input=false -no-color | tee plan.txt
+          fi
 
       # Notify success/failure
       - name: Notify on Success
