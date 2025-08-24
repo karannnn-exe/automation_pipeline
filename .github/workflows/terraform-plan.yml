@@ -17,7 +17,7 @@ on:
 jobs:
   terraform-plan:
     runs-on: self-hosted
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       # Checkout code
@@ -31,22 +31,23 @@ jobs:
         id: set_env
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "ENV=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
+            # Manual run
+            echo "ENVS=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
             echo "Environment set from manual input: ${{ github.event.inputs.environment }}"
           else
-            # Compare PR head branch with base branch to detect changed files
-            CHANGED=$(git fetch origin ${{ github.event.pull_request.base.ref }} --depth=1 && \
-                      git diff --name-only origin/${{ github.event.pull_request.base.ref }} ${{ github.head_ref }})
+            # PR run: fetch base branch
+            git fetch origin ${{ github.event.pull_request.base.ref }} --depth=1
 
-            # Detect .tfvars change
-            ENV=$(echo "$CHANGED" | grep '^terraform/envs/.*\.tfvars' | head -n1 | sed 's|terraform/envs/||;s|.tfvars||')
+            # Detect all changed .tfvars files
+            CHANGED=$(git diff --name-only origin/${{ github.event.pull_request.base.ref }} ${{ github.head_ref }})
+            ENVS=$(echo "$CHANGED" | grep '^terraform/envs/.*\.tfvars' | sed 's|terraform/envs/||;s|.tfvars||')
 
-            if [[ -n "$ENV" ]]; then
-              echo "ENV=$ENV" >> $GITHUB_ENV
-              echo "Environment detected from changed .tfvars: $ENV"
+            if [[ -n "$ENVS" ]]; then
+              echo "Detected changed environments: $ENVS"
+              echo "ENVS=$ENVS" >> $GITHUB_ENV
             elif echo "$CHANGED" | grep -q '^terraform/.*\.tf$'; then
-              echo "ENV=all" >> $GITHUB_ENV
-              echo "Core Terraform file changed, planning all environments"
+              echo "Core Terraform files changed, planning all environments"
+              echo "ENVS=all" >> $GITHUB_ENV
             else
               echo "No relevant environment detected. Exiting workflow."
               exit 1
@@ -57,44 +58,36 @@ jobs:
       - name: Configure AWS Credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          role-to-assume: ${{ secrets[format('ROLE_ARN_%s', env.ENV)] }}
+          role-to-assume: ${{ secrets[format('ROLE_ARN_%s', env.ENVS)] }}
           aws-region: us-east-1
 
-      # Select backend
-      - name: Select backend for environment
-        run: |
-          if [[ "$ENV" == "all" ]]; then
-            echo "Planning all environments; backend will be selected per environment during loop"
-          else
-            cp terraform/envs/backend_${{ env.ENV }}.tf terraform/backend.tf
-          fi
-
-      # Terraform Init
-      - name: Terraform Init
+      # Terraform Init and Plan
+      - name: Terraform Init & Plan
         working-directory: terraform
         run: |
           rm -rf .terraform
           terraform init
 
-      # Terraform Plan
-      - name: Terraform Plan
-        working-directory: terraform
-        run: |
-          if [[ "$ENV" == "all" ]]; then
+          # Loop over all detected environments
+          if [[ "$ENVS" == "all" ]]; then
             for E in dev preprod prod; do
               echo "==> Planning environment: $E"
               cp terraform/envs/backend_${E}.tf terraform/backend.tf
               terraform plan -var-file="envs/${E}.tfvars" -input=false -no-color | tee "plan_${E}.txt"
             done
           else
-            terraform plan -var-file="envs/${ENV}.tfvars" -input=false -no-color | tee plan.txt
+            for E in $ENVS; do
+              echo "==> Planning environment: $E"
+              cp terraform/envs/backend_${E}.tf terraform/backend.tf
+              terraform plan -var-file="envs/${E}.tfvars" -input=false -no-color | tee "plan_${E}.txt"
+            done
           fi
-          
+
       # Notify success/failure
       - name: Notify on Success
         if: success()
-        run: echo "Terraform Plan completed successfully for ${{ env.ENV }}"
+        run: echo "Terraform Plan completed successfully for ${{ env.ENVS }}"
 
       - name: Notify on Failure
         if: failure()
-        run: echo "Terraform Plan failed for ${{ env.ENV }}"
+        run: echo "Terraform Plan failed for ${{ env.ENVS }}"
