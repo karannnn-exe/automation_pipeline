@@ -15,6 +15,62 @@ on:
           - prod
 
 jobs:
+  detect-changes:
+    runs-on: self-hosted
+    outputs:
+      environments: ${{ steps.set_env.outputs.environments }}
+    
+    steps:
+      # Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      # Set environment(s): PR detection or manual input
+      - name: Set environment
+        id: set_env
+        run: |
+          EVENT_NAME="${{ github.event_name }}"
+          
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            SELECTED_ENV="${{ github.event.inputs.environment }}"
+            ENVS="[\"$SELECTED_ENV\"]"
+            echo "Environment set from manual input: $SELECTED_ENV"
+          else
+            # Compare PR head branch with base branch to detect changed files
+            git fetch origin ${{ github.event.pull_request.base.ref }} --depth=1
+            CHANGED=$(git diff --name-only origin/${{ github.event.pull_request.base.ref }} ${{ github.head_ref }})
+
+            # Detect changed .tfvars files and core .tf files
+            CHANGED_TFVARS=$(echo "$CHANGED" | grep '^terraform/envs/.*\.tfvars$' || true)
+            CHANGED_CORE_TF=$(echo "$CHANGED" | grep '^terraform/.*\.tf$' | grep -v '^terraform/envs/' || true)
+
+            echo "Changed files:"
+            echo "$CHANGED"
+            echo "Changed .tfvars files:"
+            echo "$CHANGED_TFVARS"
+            echo "Changed core .tf files:"
+            echo "$CHANGED_CORE_TF"
+
+            if [[ -n "$CHANGED_CORE_TF" ]]; then
+              ENVS='["dev","preprod","prod"]'
+              echo "Core Terraform files changed, planning all environments"
+            elif [[ -n "$CHANGED_TFVARS" ]]; then
+              # Extract environment names from .tfvars files
+              CHANGED_ENVS=$(echo "$CHANGED_TFVARS" | sed 's|terraform/envs/||g; s|\.tfvars||g')
+              # Convert to JSON array, removing empty lines
+              ENVS=$(echo "$CHANGED_ENVS" | grep -v '^$' | jq -R . | jq -s .)
+              echo "Planning changed environments based on .tfvars files: $CHANGED_ENVS"
+            else
+              echo "No relevant Terraform files changed. Skipping workflow."
+              ENVS='[]'
+            fi
+          fi
+          
+          echo "environments=$ENVS" >> $GITHUB_OUTPUT
+          echo "Final environments to process: $ENVS"
+
   terraform-plan:
     runs-on: self-hosted
     timeout-minutes: 45
@@ -22,6 +78,7 @@ jobs:
       matrix:
         environment: ${{ fromJson(needs.detect-changes.outputs.environments) }}
     needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.environments != '[]' }}
 
     steps:
       # Checkout code
@@ -34,7 +91,7 @@ jobs:
       - name: Configure AWS Credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          role-to-assume: ${{ secrets[format('ROLE_ARN_{0}', matrix.environment)] }}
+          role-to-assume: ${{ secrets[format('ROLE_ARN_{0}', upper(matrix.environment))] }}
           aws-region: us-east-1
 
       # Select backend
@@ -64,68 +121,3 @@ jobs:
       - name: Notify on Failure
         if: failure()
         run: echo "Terraform Plan failed for ${{ matrix.environment }}"
-
-  detect-changes:
-    runs-on: self-hosted
-    outputs:
-      environments: ${{ steps.set_env.outputs.environments }}
-    
-    steps:
-      # Checkout code
-      - name: Checkout code
-        uses: actions/checkout@v3
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
-
-      # Set environment(s): PR detection or manual input
-      - name: Set environment
-        id: set_env
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            ENVS='["${{ github.event.inputs.environment }}"]'
-            echo "Environment set from manual input: ${{ github.event.inputs.environment }}"
-          else
-            # Compare PR head branch with base branch to detect changed files
-            CHANGED=$(git fetch origin ${{ github.event.pull_request.base.ref }} --depth=1 && \
-                      git diff --name-only origin/${{ github.event.pull_request.base.ref }} ${{ github.head_ref }})
-
-            # Detect changed .tfvars files and core .tf files
-            CHANGED_TFVARS=$(echo "$CHANGED" | grep '^terraform/envs/.*\.tfvars
-          fi
-          
-          echo "environments=$ENVS" >> $GITHUB_OUTPUT
-          echo "Final environments to process: $ENVS" || true)
-            CHANGED_CORE_TF=$(echo "$CHANGED" | grep '^terraform/.*\.tf
-          fi
-          
-          echo "environments=$ENVS" >> $GITHUB_OUTPUT
-          echo "Final environments to process: $ENVS" | grep -v '^terraform/envs/' || true)
-
-            echo "Changed files:"
-            echo "$CHANGED"
-            echo "Changed .tfvars files:"
-            echo "$CHANGED_TFVARS"
-            echo "Changed core .tf files:"
-            echo "$CHANGED_CORE_TF"
-
-            if [[ -n "$CHANGED_CORE_TF" ]]; then
-              ENVS='["dev","preprod","prod"]'
-              echo "Core Terraform files changed, planning all environments"
-            elif [[ -n "$CHANGED_TFVARS" ]]; then
-              # Extract environment names from .tfvars files
-              CHANGED_ENVS=$(echo "$CHANGED_TFVARS" | sed 's|terraform/envs/||g; s|\.tfvars||g')
-              # Convert to JSON array, removing empty lines
-              ENVS=$(echo "$CHANGED_ENVS" | grep -v '^
-          fi
-          
-          echo "environments=$ENVS" >> $GITHUB_OUTPUT
-          echo "Final environments to process: $ENVS" | jq -R . | jq -s .)
-              echo "Planning changed environments based on .tfvars files: $CHANGED_ENVS"
-            else
-              echo "No relevant Terraform files changed. Skipping workflow."
-              ENVS='[]'
-            fi
-          fi
-          
-          echo "environments=$ENVS" >> $GITHUB_OUTPUT
-          echo "Final environments to process: $ENVS"
