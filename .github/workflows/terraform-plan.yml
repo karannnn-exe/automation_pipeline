@@ -1,4 +1,4 @@
-name: Terraform Plan PR
+name: Terraform Plan
 
 on:
   pull_request:
@@ -20,17 +20,32 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      # Checkout PR source branch
+      # Checkout code
       - name: Checkout code
         uses: actions/checkout@v3
         with:
-          ref: ${{ github.head_ref }}
+          ref: ${{ github.head_ref || github.ref_name }}
 
-      # Set environment (manual input or default from workflow_dispatch)
+      # Set environment: PR detection or manual input
       - name: Set environment
+        id: set_env
         run: |
-          if [ -n "${{ github.event.inputs.environment }}" ]; then
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "ENV=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
+            echo "Environment set from manual input: ${{ github.event.inputs.environment }}"
+          else
+            ENV=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} \
+              | grep '^terraform/envs/' \
+              | grep '.tfvars' \
+              | head -n1 \
+              | sed 's|terraform/envs/||;s|.tfvars||')
+            if [ -z "$ENV" ]; then
+              echo "No environment detected from PR, defaulting to dev"
+              ENV=dev
+            fi
+            echo "ENV=$ENV" >> $GITHUB_ENV
+            echo "Environment detected from PR: $ENV"
+          fi
 
       # Configure AWS credentials
       - name: Configure AWS Credentials via OIDC
@@ -39,7 +54,7 @@ jobs:
           role-to-assume: ${{ secrets[format('ROLE_ARN_%s', env.ENV)] }}
           aws-region: us-east-1
 
-      # Select backend for the environment
+      # Select backend
       - name: Select backend for environment
         run: cp terraform/envs/backend_${{ env.ENV }}.tf terraform/backend.tf
 
@@ -53,14 +68,18 @@ jobs:
         working-directory: terraform
         run: terraform plan -var-file="envs/${ENV}.tfvars" -input=false -no-color -out=tfplan
 
-      # Post plan as PR comment
+      # Post plan as PR comment (PR only)
       - name: Comment Terraform Plan on PR
-        uses: dflook/terraform-plan-comment-action@v1
-        with:
-          planfile: terraform/tfplan
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+        if: github.event_name == 'pull_request'
+        run: |
+          PLAN=$(terraform show -no-color terraform/tfplan)
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"body\": \"\`\`\`terraform\n$PLAN\`\`\`\"}" \
+            https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments
 
-      # Optional: Notify success/failure
+      # Notify success/failure
       - name: Notify on Success
         if: success()
         run: echo "Terraform Plan completed successfully for ${{ env.ENV }}"
