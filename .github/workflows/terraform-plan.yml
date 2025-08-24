@@ -29,8 +29,11 @@ jobs:
       # Set environment(s): PR detection or manual input
       - name: Set environment
         id: set_env
+        shell: bash
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          EVENT_NAME="${GITHUB_EVENT_NAME:-${{ github.event_name }}}"
+
+          if [ "$EVENT_NAME" == "workflow_dispatch" ]; then
             # Manual run
             echo "ENVS=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
             echo "Environment set from manual input: ${{ github.event.inputs.environment }}"
@@ -42,7 +45,7 @@ jobs:
             CHANGED=$(git diff --name-only origin/${{ github.event.pull_request.base.ref }} ${{ github.head_ref }})
             ENVS=$(echo "$CHANGED" | grep '^terraform/envs/.*\.tfvars' | sed 's|terraform/envs/||;s|.tfvars||' | tr '\n' ' ')
 
-            if [[ -n "$ENVS" ]]; then
+            if [ -n "$ENVS" ]; then
               echo "Detected changed environments: $ENVS"
               echo "ENVS=$ENVS" >> $GITHUB_ENV
             elif echo "$CHANGED" | grep -q '^terraform/.*\.tf$'; then
@@ -63,11 +66,12 @@ jobs:
       # Terraform Init and Plan
       - name: Terraform Init & Plan
         working-directory: terraform
+        shell: bash
         run: |
           rm -rf .terraform
           terraform init
 
-          if [[ "$ENVS" == "all" ]]; then
+          if [ "$ENVS" == "all" ]; then
             for E in dev preprod prod; do
               echo "==> Planning environment: $E"
               cp terraform/envs/backend_${E}.tf terraform/backend.tf
@@ -78,30 +82,6 @@ jobs:
               echo "==> Planning environment: $E"
               cp terraform/envs/backend_${E}.tf terraform/backend.tf
               terraform plan -var-file="envs/${E}.tfvars" -input=false -no-color | tee "plan_${E}.txt"
-            done
-          fi
-
-      # Post plan as PR comment (PR only)
-      - name: Comment Terraform Plan on PR
-        if: github.event_name == 'pull_request'
-        run: |
-          if [[ "$ENVS" == "all" ]]; then
-            for E in dev preprod prod; do
-              PLAN=$(cat terraform/plan_${E}.txt)
-              curl -X POST \
-                -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-                -H "Content-Type: application/json" \
-                -d "{\"body\": \"**Terraform Plan for ${E}**\n\`\`\`terraform\n$PLAN\`\`\`\"}" \
-                https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments
-            done
-          else
-            for E in $ENVS; do
-              PLAN=$(cat terraform/plan_${E}.txt)
-              curl -X POST \
-                -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-                -H "Content-Type: application/json" \
-                -d "{\"body\": \"**Terraform Plan for ${E}**\n\`\`\`terraform\n$PLAN\`\`\`\"}" \
-                https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments
             done
           fi
 
