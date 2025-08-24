@@ -18,7 +18,6 @@ jobs:
   terraform-plan:
     runs-on: self-hosted
     timeout-minutes: 90
-
     steps:
       # Checkout code
       - name: Checkout code
@@ -50,7 +49,7 @@ jobs:
             echo "No .tfvars changes detected. Checking Terraform code changes..."
             TF_CHANGED=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} \
               | grep '.tf$' || true)
-
+            
             if [ -n "$TF_CHANGED" ]; then
               echo "Terraform code changed. Running plan for all environments."
               ALL_ENVS=$(ls terraform/envs/*.tfvars | sed 's|terraform/envs/||;s|.tfvars||' | sort -u)
@@ -66,26 +65,27 @@ jobs:
         working-directory: terraform
         run: |
           echo "Environments to plan: $ENVS"
+          
           for ENV in $ENVS; do
             echo "=============================="
             echo "Planning environment: $ENV"
             echo "=============================="
-
+            
             # Configure AWS credentials dynamically per environment
             ROLE_ARN_SECRET="ROLE_ARN_${ENV}"
             echo "Using secret: $ROLE_ARN_SECRET"
             export AWS_ROLE_ARN="${{ secrets[ROLE_ARN_SECRET] }}"
             aws configure set region us-east-1
-
+            
             # Select backend
             cp terraform/envs/backend_${ENV}.tf terraform/backend.tf
-
+            
             # Terraform Init
             terraform init -input=false
-
+            
             # Terraform Plan
             terraform plan -var-file="envs/${ENV}.tfvars" -input=false -no-color -out=tfplan_${ENV}
-
+            
             echo "Terraform plan completed for environment: $ENV"
           done
 
