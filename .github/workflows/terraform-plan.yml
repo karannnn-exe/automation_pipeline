@@ -58,23 +58,23 @@ jobs:
       - name: Select backend for environment
         run: cp terraform/envs/backend_${{ env.ENV }}.tf terraform/backend.tf
 
-      - name: Terraform Init (with plugin cache)
+      # Terraform Init
+      - name: Terraform Init
         working-directory: terraform
         run: |
           rm -rf .terraform
           terraform init
 
-
-      # Terraform Plan
+      # Terraform Plan (capture text output)
       - name: Terraform Plan
         working-directory: terraform
-        run: terraform plan -var-file="envs/${ENV}.tfvars" -input=false -no-color -out=tfplan
+        run: terraform plan -var-file="envs/${ENV}.tfvars" -input=false -no-color | tee plan.txt
 
       # Post plan as PR comment (PR only)
       - name: Comment Terraform Plan on PR
         if: github.event_name == 'pull_request'
         run: |
-          PLAN=$(terraform show -no-color terraform/tfplan)
+          PLAN=$(cat terraform/plan.txt)
           curl -X POST \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/json" \
