@@ -13,10 +13,26 @@ on:
           - prod
 
 jobs:
+  branch-check:
+    runs-on: self-hosted
+    timeout-minutes: 1
+    steps:
+      - name: Check if running on main branch
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "This workflow can only be run from the main branch"
+          echo "Current branch: ${{ github.ref }}"
+          echo "Required branch: refs/heads/main"
+          exit 1
+      
+      - name: Confirm main branch
+        if: github.ref == 'refs/heads/main'
+        run: echo "Running on main branch - proceeding with Terraform workflow"
+
   terraform-plan:
+    needs: branch-check
     runs-on: self-hosted
     timeout-minutes: 15
-    if: github.ref == 'refs/heads/main'
     outputs:
       env: ${{ steps.set-env.outputs.env }}
 
@@ -73,7 +89,6 @@ jobs:
   approval:
     needs: terraform-plan
     runs-on: self-hosted
-    if: github.ref == 'refs/heads/main'
     environment:
       name: ${{ needs.terraform-plan.outputs.env }}-approval
     steps:
@@ -84,7 +99,7 @@ jobs:
     needs: approval
     runs-on: self-hosted
     timeout-minutes: 30
-    if: ${{ needs.approval.result == 'success' && github.ref == 'refs/heads/main' }}
+    if: ${{ needs.approval.result == 'success' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
