@@ -90,7 +90,7 @@ jobs:
     needs: terraform-plan
     runs-on: self-hosted
     environment:
-      name: ${{ needs.terraform-plan.outputs.env }}-approval
+      name: terraform-approval
     steps:
       - name: Await manual approval
         run: echo "Waiting for manual approval via environment protection"
