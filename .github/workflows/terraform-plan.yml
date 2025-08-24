@@ -17,7 +17,7 @@ on:
 jobs:
   terraform-plan:
     runs-on: self-hosted
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       # Checkout code
@@ -61,21 +61,22 @@ jobs:
             fi
           fi
 
-      # Configure AWS credentials via OIDC
-      - name: Configure AWS Credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          role-to-assume: ${{ secrets[format('ROLE_ARN_%s', env.ENV)] }}
-          aws-region: us-east-1
-
-      # Terraform Init & Plan Loop
+      # Terraform Plan Loop
       - name: Terraform Plan
         working-directory: terraform
         run: |
+          echo "Environments to plan: $ENVS"
           for ENV in $ENVS; do
             echo "=============================="
             echo "Planning environment: $ENV"
             echo "=============================="
+
+            # Configure AWS credentials dynamically per environment
+            ROLE_ARN_SECRET="ROLE_ARN_${ENV}"
+            echo "Assuming role from secret: $ROLE_ARN_SECRET"
+            aws-actions/configure-aws-credentials@v2
+            aws configure set region us-east-1
+            export AWS_ROLE_ARN="${{ secrets[ROLE_ARN_SECRET] }}"
 
             # Select backend
             cp terraform/envs/backend_${ENV}.tf terraform/backend.tf
