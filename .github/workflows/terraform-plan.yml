@@ -58,10 +58,12 @@ jobs:
       - name: Select backend for environment
         run: cp terraform/envs/backend_${{ env.ENV }}.tf terraform/backend.tf
 
-      # Terraform Init
-      - name: Terraform Init
+      - name: Terraform Init (with plugin cache)
         working-directory: terraform
-        run: terraform init
+        run: |
+          rm -rf .terraform
+          terraform init
+
 
       # Terraform Plan
       - name: Terraform Plan
