@@ -88,12 +88,6 @@ jobs:
           role-to-assume: ${{ secrets[format('ROLE_ARN_%s', github.event.inputs.environment)] }}
           aws-region: us-east-1
 
-      - name: Cache Terraform plugins
-        uses: actions/cache@v3
-        with:
-          path: ~/.terraform.d/plugin-cache
-          key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}
-
       - name: Select backend for environment
         run: cp terraform/envs/backend_${{ github.event.inputs.environment }}.tf terraform/backend.tf
 
