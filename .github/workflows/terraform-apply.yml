@@ -16,6 +16,7 @@ jobs:
   terraform-plan:
     runs-on: self-hosted
     timeout-minutes: 15
+    if: github.ref == 'refs/heads/main'
     outputs:
       env: ${{ steps.set-env.outputs.env }}
 
@@ -32,6 +33,11 @@ jobs:
         with:
           role-to-assume: ${{ secrets[format('ROLE_ARN_%s', github.event.inputs.environment)] }}
           aws-region: us-east-1
+
+      - name: Setup Terraform Plugin Cache
+        run: |
+          mkdir -p ~/.terraform.d/plugin-cache
+          echo 'plugin_cache_dir="$HOME/.terraform.d/plugin-cache"' > ~/.terraformrc
 
       - name: Cache Terraform plugins
         uses: actions/cache@v3
@@ -67,6 +73,7 @@ jobs:
   approval:
     needs: terraform-plan
     runs-on: self-hosted
+    if: github.ref == 'refs/heads/main'
     environment:
       name: ${{ needs.terraform-plan.outputs.env }}-approval
     steps:
@@ -77,7 +84,7 @@ jobs:
     needs: approval
     runs-on: self-hosted
     timeout-minutes: 30
-    if: ${{ needs.approval.result == 'success' }}
+    if: ${{ needs.approval.result == 'success' && github.ref == 'refs/heads/main' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -87,6 +94,17 @@ jobs:
         with:
           role-to-assume: ${{ secrets[format('ROLE_ARN_%s', github.event.inputs.environment)] }}
           aws-region: us-east-1
+
+      - name: Setup Terraform Plugin Cache
+        run: |
+          mkdir -p ~/.terraform.d/plugin-cache
+          echo 'plugin_cache_dir="$HOME/.terraform.d/plugin-cache"' > ~/.terraformrc
+
+      - name: Cache Terraform plugins
+        uses: actions/cache@v3
+        with:
+          path: ~/.terraform.d/plugin-cache
+          key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}
 
       - name: Select backend for environment
         run: cp terraform/envs/backend_${{ github.event.inputs.environment }}.tf terraform/backend.tf
@@ -103,7 +121,7 @@ jobs:
 
       - name: Terraform Apply (Approved Plan)
         working-directory: terraform
-        run: terraform apply tfplan 
+        run: terraform apply tfplan
 
       - name: Notify on Success
         if: success()
