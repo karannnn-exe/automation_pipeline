@@ -17,7 +17,7 @@ on:
 jobs:
   terraform-plan:
     runs-on: self-hosted
-    timeout-minutes: 60
+    timeout-minutes: 45
 
     steps:
       # Checkout code
@@ -25,90 +25,76 @@ jobs:
         uses: actions/checkout@v3
         with:
           ref: ${{ github.head_ref || github.ref_name }}
-          fetch-depth: 0  # Need full history for git diff
 
       # Set environment(s): PR detection or manual input
       - name: Set environment
         id: set_env
-        shell: bash
         run: |
-          EVENT_NAME="${GITHUB_EVENT_NAME:-${{ github.event_name }}}"
-
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            # Manual run - single environment
-            echo "ENVS=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
-            echo "SINGLE_ENV=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "ENV=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
             echo "Environment set from manual input: ${{ github.event.inputs.environment }}"
           else
-            # PR run: detect changed environments
-            git fetch origin ${{ github.event.pull_request.base.ref }} --depth=1
+            # Compare PR head branch with base branch to detect changed files
+            CHANGED=$(git fetch origin ${{ github.event.pull_request.base.ref }} --depth=1 && \
+                      git diff --name-only origin/${{ github.event.pull_request.base.ref }} ${{ github.head_ref }})
 
-            # Detect changed .tfvars files
-            CHANGED=$(git diff --name-only origin/${{ github.event.pull_request.base.ref }} HEAD)
-            ENVS=$(echo "$CHANGED" | grep '^terraform/envs/.*\.tfvars$' | sed 's|terraform/envs/||;s|\.tfvars||' | sort -u | tr '\n' ' ')
+            # Detect .tfvars change
+            ENV=$(echo "$CHANGED" | grep '^terraform/envs/.*\.tfvars' | head -n1 | sed 's|terraform/envs/||;s|.tfvars||')
 
-            if [ -n "$ENVS" ]; then
-              echo "Detected changed environments: $ENVS"
-              echo "ENVS=$ENVS" >> $GITHUB_ENV
-              # For AWS role, use first environment detected
-              FIRST_ENV=$(echo $ENVS | awk '{print $1}')
-              echo "SINGLE_ENV=$FIRST_ENV" >> $GITHUB_ENV
+            if [[ -n "$ENV" ]]; then
+              echo "ENV=$ENV" >> $GITHUB_ENV
+              echo "Environment detected from changed .tfvars: $ENV"
             elif echo "$CHANGED" | grep -q '^terraform/.*\.tf$'; then
-              echo "Core Terraform files changed, planning all environments"
-              echo "ENVS=dev preprod prod" >> $GITHUB_ENV
-              echo "SINGLE_ENV=dev" >> $GITHUB_ENV
+              echo "ENV=all" >> $GITHUB_ENV
+              echo "Core Terraform file changed, planning all environments"
             else
-              echo "No relevant Terraform changes detected. Skipping plan."
-              echo "ENVS=" >> $GITHUB_ENV
-              echo "SINGLE_ENV=" >> $GITHUB_ENV
+              echo "No relevant environment detected. Exiting workflow."
+              exit 1
             fi
           fi
 
-      # Skip if no environments to plan
-      - name: Check if planning needed
-        if: env.ENVS == ''
-        run: |
-          echo "No environments to plan. Exiting gracefully."
-          exit 0
-
-      # Configure AWS credentials (using single environment for role)
+      # Configure AWS credentials
       - name: Configure AWS Credentials via OIDC
-        if: env.SINGLE_ENV != ''
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          role-to-assume: ${{ secrets[format('ROLE_ARN_{0}', env.SINGLE_ENV)] }}
+          role-to-assume: ${{ secrets[format('ROLE_ARN_%s', env.ENV)] }}
           aws-region: us-east-1
 
-      # Terraform Init & Plan
-      - name: Terraform Init & Plan
-        if: env.ENVS != ''
-        working-directory: terraform
-        shell: bash
+      # Select backend
+      - name: Select backend for environment
         run: |
-          # Clean any existing state
-          rm -rf .terraform terraform/backend.tf
+          if [[ "$ENV" == "all" ]]; then
+            echo "Planning all environments; backend will be selected per environment during loop"
+          else
+            cp terraform/envs/backend_${{ env.ENV }}.tf terraform/backend.tf
+          fi
 
-          for E in $ENVS; do
-            echo "==> Planning environment: $E"
-            
-            # Copy backend configuration
-            cp envs/backend_${E}.tf backend.tf
-            
-            # Initialize for this environment
-            terraform init -reconfigure
-            
-            # Run plan
-            terraform plan -var-file="envs/${E}.tfvars" -input=false -no-color | tee "plan_${E}.txt"
-            
-            echo "Completed planning for environment: $E"
-            echo "----------------------------------------"
-          done
+      # Terraform Init
+      - name: Terraform Init
+        working-directory: terraform
+        run: |
+          rm -rf .terraform
+          terraform init
+
+      # Terraform Plan
+      - name: Terraform Plan
+        working-directory: terraform
+        run: |
+          if [[ "$ENV" == "all" ]]; then
+            for E in dev preprod prod; do
+              echo "==> Planning environment: $E"
+              cp terraform/envs/backend_${E}.tf terraform/backend.tf
+              terraform plan -var-file="envs/${E}.tfvars" -input=false -no-color | tee "plan_${E}.txt"
+            done
+          else
+            terraform plan -var-file="envs/${ENV}.tfvars" -input=false -no-color | tee plan.txt
+          fi
 
       # Notify success/failure
       - name: Notify on Success
-        if: success() && env.ENVS != ''
-        run: echo "Terraform Plan completed successfully for environments: ${{ env.ENVS }}"
+        if: success()
+        run: echo "Terraform Plan completed successfully for ${{ env.ENV }}"
 
       - name: Notify on Failure
         if: failure()
-        run: echo "Terraform Plan failed for environments: ${{ env.ENVS }}"
+        run: echo "Terraform Plan failed for ${{ env.ENV }}"
