@@ -87,6 +87,27 @@ jobs:
             terraform plan -var-file="envs/${ENV}.tfvars" -input=false -no-color | tee plan.txt
           fi
 
+      # Post plan as PR comment (PR only)
+      - name: Comment Terraform Plan on PR
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ "$ENV" = "all" ]; then
+            for E in dev preprod prod; do
+              PLAN=$(cat terraform/plan_${E}.txt)
+              curl -X POST \
+                -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                -H "Content-Type: application/json" \
+                -d "{\"body\": \"**Terraform Plan for ${E}**\n\`\`\`terraform\n$PLAN\`\`\`\"}" \
+                https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments
+            done
+          else
+            PLAN=$(cat terraform/plan.txt)
+            curl -X POST \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              -d "{\"body\": \"**Terraform Plan for ${ENV}**\n\`\`\`terraform\n$PLAN\`\`\`\"}" \
+              https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments
+
       # Notify success/failure
       - name: Notify on Success
         if: success()
