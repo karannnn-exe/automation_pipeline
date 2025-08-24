@@ -109,7 +109,7 @@ jobs:
 
       - name: Terraform Apply (Approved Plan)
         working-directory: terraform
-        run: terraform apply tfplan -input=false -no-color -auto-approve
+        run: terraform apply tfplan 
 
       - name: Notify on Success
         if: success()
