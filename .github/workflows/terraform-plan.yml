@@ -11,10 +11,6 @@ on:
           - dev
           - preprod
           - prod
-      branch:
-        description: 'Branch to run Terraform Plan on'
-        required: true
-        default: main
 
 jobs:
   terraform-plan:
