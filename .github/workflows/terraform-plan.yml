@@ -11,6 +11,10 @@ on:
           - dev
           - preprod
           - prod
+      branch:
+        description: 'Branch to run Terraform Plan on'
+        required: true
+        default: main
 
 jobs:
   terraform-plan:
@@ -20,6 +24,7 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+        ref: ${{ github.ref_name }}
 
       - name: Set environment
         run: echo "ENV=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
