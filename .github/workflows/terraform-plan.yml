@@ -31,70 +31,73 @@ jobs:
         id: set_env
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "ENV=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
+            echo "ENVS=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
             echo "Environment set from manual input: ${{ github.event.inputs.environment }}"
           else
             # Compare PR head branch with base branch to detect changed files
             CHANGED=$(git fetch origin ${{ github.event.pull_request.base.ref }} --depth=1 && \
                       git diff --name-only origin/${{ github.event.pull_request.base.ref }} ${{ github.head_ref }})
 
-            # Detect .tfvars change
-            ENV=$(echo "$CHANGED" | grep '^terraform/envs/.*\.tfvars' | head -n1 | sed 's|terraform/envs/||;s|.tfvars||')
+            # Detect changed .tfvars files and core .tf files
+            CHANGED_ENVS=$(echo "$CHANGED" | grep '^terraform/envs/.*\.tfvars' | sed 's|terraform/envs/||;s|.tfvars||' | tr '\n' ' ' | xargs)
+            CORE_CHANGED=$(echo "$CHANGED" | grep -q '^terraform/.*\.tf$' && echo "true" || echo "false")
 
-            if [[ -n "$ENV" ]]; then
-              echo "ENV=$ENV" >> $GITHUB_ENV
-              echo "Environment detected from changed .tfvars: $ENV"
-            elif echo "$CHANGED" | grep -q '^terraform/.*\.tf$'; then
-              echo "ENV=all" >> $GITHUB_ENV
-              echo "Core Terraform file changed, planning all environments"
+            if [[ -n "$CHANGED_ENVS" && "$CORE_CHANGED" == "true" ]]; then
+              echo "ENVS=dev preprod prod" >> $GITHUB_ENV
+              echo "Core Terraform files changed, planning all environments"
+            elif [[ -n "$CHANGED_ENVS" ]]; then
+              echo "ENVS=$CHANGED_ENVS" >> $GITHUB_ENV
+              echo "Planning changed environments: $CHANGED_ENVS"
+            elif [[ "$CORE_CHANGED" == "true" ]]; then
+              echo "ENVS=dev preprod prod" >> $GITHUB_ENV
+              echo "Core Terraform files changed, planning all environments"
             else
               echo "No relevant environment detected. Exiting workflow."
               exit 1
             fi
           fi
 
-      # Configure AWS credentials
+      # Configure AWS credentials for each environment
+      - name: Terraform Init and Plan
+        run: |
+          cd terraform
+          
+          for ENV in $ENVS; do
+            echo "==> Processing environment: $ENV"
+            
+            # Configure AWS credentials for this environment
+            export AWS_ROLE_ARN="${{ secrets[format('ROLE_ARN_{0}', env.ENV)] }}"
+            
+            # Clean up previous state
+            rm -rf .terraform terraform.tfstate* .terraform.lock.hcl
+            
+            # Set up backend for this environment
+            cp envs/backend_${ENV}.tf backend.tf
+            
+            # Initialize Terraform
+            echo "Initializing Terraform for $ENV..."
+            terraform init -no-color
+            
+            # Run Terraform plan
+            echo "Running Terraform plan for $ENV..."
+            terraform plan -var-file="envs/${ENV}.tfvars" -input=false -no-color | tee "plan_${ENV}.txt"
+            
+            echo "Completed planning for $ENV"
+            echo "=================================="
+          done
+
+      # Configure AWS credentials (needed for the steps above)
       - name: Configure AWS Credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          role-to-assume: ${{ secrets[format('ROLE_ARN_%s', env.ENV)] }}
+          role-to-assume: ${{ secrets.ROLE_ARN_DEV }}  # Default role, will be overridden per environment
           aws-region: us-east-1
-
-      # Select backend
-      - name: Select backend for environment
-        run: |
-          if [[ "$ENV" == "all" ]]; then
-            echo "Planning all environments; backend will be selected per environment during loop"
-          else
-            cp terraform/envs/backend_${{ env.ENV }}.tf terraform/backend.tf
-          fi
-
-      # Terraform Init
-      - name: Terraform Init
-        working-directory: terraform
-        run: |
-          rm -rf .terraform
-          terraform init
-
-      # Terraform Plan
-      - name: Terraform Plan
-        working-directory: terraform
-        run: |
-          if [[ "$ENV" == "all" ]]; then
-            for E in dev preprod prod; do
-              echo "==> Planning environment: $E"
-              cp terraform/envs/backend_${E}.tf terraform/backend.tf
-              terraform plan -var-file="envs/${E}.tfvars" -input=false -no-color | tee "plan_${E}.txt"
-            done
-          else
-            terraform plan -var-file="envs/${ENV}.tfvars" -input=false -no-color | tee plan.txt
-          fi
 
       # Notify success/failure
       - name: Notify on Success
         if: success()
-        run: echo "Terraform Plan completed successfully for ${{ env.ENV }}"
+        run: echo "Terraform Plan completed successfully for environments: ${{ env.ENVS }}"
 
       - name: Notify on Failure
         if: failure()
-        run: echo "Terraform Plan failed for ${{ env.ENV }}"
+        run: echo "Terraform Plan failed for environments: ${{ env.ENVS }}"
