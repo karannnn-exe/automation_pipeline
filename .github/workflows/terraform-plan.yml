@@ -30,7 +30,7 @@ jobs:
       - name: Set environment
         id: set_env
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "ENV=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
             echo "Environment set from manual input: ${{ github.event.inputs.environment }}"
           else
@@ -39,7 +39,7 @@ jobs:
             # Detect .tfvars change
             ENV=$(echo "$CHANGED" | grep '^terraform/envs/.*\.tfvars' | head -n1 | sed 's|terraform/envs/||;s|.tfvars||')
 
-            if [ -n "$ENV" ]; then
+            if [[ -n "$ENV" ]]; then
               echo "ENV=$ENV" >> $GITHUB_ENV
               echo "Environment detected from changed .tfvars: $ENV"
             elif echo "$CHANGED" | grep -q '^terraform/.*\.tf$'; then
@@ -49,6 +49,7 @@ jobs:
               echo "No relevant environment detected. Exiting workflow."
               exit 1
             fi
+          fi
 
       # Configure AWS credentials
       - name: Configure AWS Credentials via OIDC
@@ -60,7 +61,7 @@ jobs:
       # Select backend
       - name: Select backend for environment
         run: |
-          if [ "$ENV" = "all" ]; then
+          if [[ "$ENV" == "all" ]]; then
             echo "Planning all environments; backend will be selected per environment during loop"
           else
             cp terraform/envs/backend_${{ env.ENV }}.tf terraform/backend.tf
@@ -77,7 +78,7 @@ jobs:
       - name: Terraform Plan
         working-directory: terraform
         run: |
-          if [ "$ENV" = "all" ]; then
+          if [[ "$ENV" == "all" ]]; then
             for E in dev preprod prod; do
               echo "==> Planning environment: $E"
               cp terraform/envs/backend_${E}.tf terraform/backend.tf
@@ -91,7 +92,7 @@ jobs:
       - name: Comment Terraform Plan on PR
         if: github.event_name == 'pull_request'
         run: |
-          if [ "$ENV" = "all" ]; then
+          if [[ "$ENV" == "all" ]]; then
             for E in dev preprod prod; do
               PLAN=$(cat terraform/plan_${E}.txt)
               curl -X POST \
