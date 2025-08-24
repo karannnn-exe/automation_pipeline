@@ -90,21 +90,39 @@ jobs:
                       git diff --name-only origin/${{ github.event.pull_request.base.ref }} ${{ github.head_ref }})
 
             # Detect changed .tfvars files and core .tf files
-            CHANGED_ENVS=$(echo "$CHANGED" | grep '^terraform/envs/.*\.tfvars' | sed 's|terraform/envs/||;s|.tfvars||')
-            CORE_CHANGED=$(echo "$CHANGED" | grep -q '^terraform/.*\.tf$' && echo "true" || echo "false")
+            CHANGED_TFVARS=$(echo "$CHANGED" | grep '^terraform/envs/.*\.tfvars
+          fi
+          
+          echo "environments=$ENVS" >> $GITHUB_OUTPUT
+          echo "Final environments to process: $ENVS" || true)
+            CHANGED_CORE_TF=$(echo "$CHANGED" | grep '^terraform/.*\.tf
+          fi
+          
+          echo "environments=$ENVS" >> $GITHUB_OUTPUT
+          echo "Final environments to process: $ENVS" | grep -v '^terraform/envs/' || true)
 
-            if [[ -n "$CHANGED_ENVS" && "$CORE_CHANGED" == "true" ]]; then
+            echo "Changed files:"
+            echo "$CHANGED"
+            echo "Changed .tfvars files:"
+            echo "$CHANGED_TFVARS"
+            echo "Changed core .tf files:"
+            echo "$CHANGED_CORE_TF"
+
+            if [[ -n "$CHANGED_CORE_TF" ]]; then
               ENVS='["dev","preprod","prod"]'
               echo "Core Terraform files changed, planning all environments"
-            elif [[ -n "$CHANGED_ENVS" ]]; then
-              # Convert space-separated list to JSON array
-              ENVS=$(echo "$CHANGED_ENVS" | tr ' ' '\n' | jq -R . | jq -s .)
-              echo "Planning changed environments: $CHANGED_ENVS"
-            elif [[ "$CORE_CHANGED" == "true" ]]; then
-              ENVS='["dev","preprod","prod"]'
-              echo "Core Terraform files changed, planning all environments"
+            elif [[ -n "$CHANGED_TFVARS" ]]; then
+              # Extract environment names from .tfvars files
+              CHANGED_ENVS=$(echo "$CHANGED_TFVARS" | sed 's|terraform/envs/||g; s|\.tfvars||g')
+              # Convert to JSON array, removing empty lines
+              ENVS=$(echo "$CHANGED_ENVS" | grep -v '^
+          fi
+          
+          echo "environments=$ENVS" >> $GITHUB_OUTPUT
+          echo "Final environments to process: $ENVS" | jq -R . | jq -s .)
+              echo "Planning changed environments based on .tfvars files: $CHANGED_ENVS"
             else
-              echo "No relevant environment detected. Exiting workflow."
+              echo "No relevant Terraform files changed. Skipping workflow."
               ENVS='[]'
             fi
           fi
