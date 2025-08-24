@@ -1,6 +1,8 @@
-name: Terraform Plan
+name: Terraform Plan PR
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
       environment:
@@ -11,42 +13,58 @@ on:
           - dev
           - preprod
           - prod
-      
 
 jobs:
   terraform-plan:
     runs-on: self-hosted
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
+      # Checkout PR source branch
       - name: Checkout code
         uses: actions/checkout@v3
+        with:
+          ref: ${{ github.head_ref }}
 
+      # Set environment (manual input or default from workflow_dispatch)
       - name: Set environment
-        run: echo "ENV=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
+        run: |
+          if [ -n "${{ github.event.inputs.environment }}" ]; then
+            echo "ENV=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
 
+      # Configure AWS credentials
       - name: Configure AWS Credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v2
         with:
           role-to-assume: ${{ secrets[format('ROLE_ARN_%s', env.ENV)] }}
           aws-region: us-east-1
 
+      # Select backend for the environment
       - name: Select backend for environment
         run: cp terraform/envs/backend_${{ env.ENV }}.tf terraform/backend.tf
 
-
+      # Terraform Init
       - name: Terraform Init
         working-directory: terraform
-        run: terraform init 
+        run: terraform init
 
+      # Terraform Plan
       - name: Terraform Plan
         working-directory: terraform
-        run: terraform plan -var-file="envs/${ENV}.tfvars" -input=false -no-color
+        run: terraform plan -var-file="envs/${ENV}.tfvars" -input=false -no-color -out=tfplan
 
+      # Post plan as PR comment
+      - name: Comment Terraform Plan on PR
+        uses: dflook/terraform-plan-comment-action@v1
+        with:
+          planfile: terraform/tfplan
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Optional: Notify success/failure
       - name: Notify on Success
         if: success()
-        run: echo "Terraform Apply completed successfully for ${{ github.event.inputs.environment }}"
+        run: echo "Terraform Plan completed successfully for ${{ env.ENV }}"
 
       - name: Notify on Failure
         if: failure()
-        run: echo "Terraform Apply failed for ${{ github.event.inputs.environment }}"
+        run: echo "Terraform Plan failed for ${{ env.ENV }}"
