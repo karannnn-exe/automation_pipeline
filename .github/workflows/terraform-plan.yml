@@ -18,7 +18,58 @@ jobs:
   terraform-plan:
     runs-on: self-hosted
     timeout-minutes: 45
+    strategy:
+      matrix:
+        environment: ${{ fromJson(needs.detect-changes.outputs.environments) }}
+    needs: detect-changes
 
+    steps:
+      # Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      # Configure AWS credentials
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets[format('ROLE_ARN_{0}', matrix.environment)] }}
+          aws-region: us-east-1
+
+      # Select backend
+      - name: Select backend for environment
+        run: |
+          cd terraform
+          cp envs/backend_${{ matrix.environment }}.tf backend.tf
+
+      # Terraform Init
+      - name: Terraform Init
+        working-directory: terraform
+        run: |
+          rm -rf .terraform
+          terraform init
+
+      # Terraform Plan
+      - name: Terraform Plan
+        working-directory: terraform
+        run: |
+          terraform plan -var-file="envs/${{ matrix.environment }}.tfvars" -input=false -no-color | tee plan_${{ matrix.environment }}.txt
+
+      # Notify success/failure
+      - name: Notify on Success
+        if: success()
+        run: echo "Terraform Plan completed successfully for ${{ matrix.environment }}"
+
+      - name: Notify on Failure
+        if: failure()
+        run: echo "Terraform Plan failed for ${{ matrix.environment }}"
+
+  detect-changes:
+    runs-on: self-hosted
+    outputs:
+      environments: ${{ steps.set_env.outputs.environments }}
+    
     steps:
       # Checkout code
       - name: Checkout code
@@ -31,7 +82,7 @@ jobs:
         id: set_env
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "ENVS=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
+            ENVS='["${{ github.event.inputs.environment }}"]'
             echo "Environment set from manual input: ${{ github.event.inputs.environment }}"
           else
             # Compare PR head branch with base branch to detect changed files
@@ -39,65 +90,24 @@ jobs:
                       git diff --name-only origin/${{ github.event.pull_request.base.ref }} ${{ github.head_ref }})
 
             # Detect changed .tfvars files and core .tf files
-            CHANGED_ENVS=$(echo "$CHANGED" | grep '^terraform/envs/.*\.tfvars' | sed 's|terraform/envs/||;s|.tfvars||' | tr '\n' ' ' | xargs)
+            CHANGED_ENVS=$(echo "$CHANGED" | grep '^terraform/envs/.*\.tfvars' | sed 's|terraform/envs/||;s|.tfvars||')
             CORE_CHANGED=$(echo "$CHANGED" | grep -q '^terraform/.*\.tf$' && echo "true" || echo "false")
 
             if [[ -n "$CHANGED_ENVS" && "$CORE_CHANGED" == "true" ]]; then
-              echo "ENVS=dev preprod prod" >> $GITHUB_ENV
+              ENVS='["dev","preprod","prod"]'
               echo "Core Terraform files changed, planning all environments"
             elif [[ -n "$CHANGED_ENVS" ]]; then
-              echo "ENVS=$CHANGED_ENVS" >> $GITHUB_ENV
+              # Convert space-separated list to JSON array
+              ENVS=$(echo "$CHANGED_ENVS" | tr ' ' '\n' | jq -R . | jq -s .)
               echo "Planning changed environments: $CHANGED_ENVS"
             elif [[ "$CORE_CHANGED" == "true" ]]; then
-              echo "ENVS=dev preprod prod" >> $GITHUB_ENV
+              ENVS='["dev","preprod","prod"]'
               echo "Core Terraform files changed, planning all environments"
             else
               echo "No relevant environment detected. Exiting workflow."
-              exit 1
+              ENVS='[]'
             fi
           fi
-
-      # Configure AWS credentials for each environment
-      - name: Terraform Init and Plan
-        run: |
-          cd terraform
           
-          for ENV in $ENVS; do
-            echo "==> Processing environment: $ENV"
-            
-            # Configure AWS credentials for this environment
-            export AWS_ROLE_ARN="${{ secrets[format('ROLE_ARN_{0}', env.ENV)] }}"
-            
-            # Clean up previous state
-            rm -rf .terraform terraform.tfstate* .terraform.lock.hcl
-            
-            # Set up backend for this environment
-            cp envs/backend_${ENV}.tf backend.tf
-            
-            # Initialize Terraform
-            echo "Initializing Terraform for $ENV..."
-            terraform init -no-color
-            
-            # Run Terraform plan
-            echo "Running Terraform plan for $ENV..."
-            terraform plan -var-file="envs/${ENV}.tfvars" -input=false -no-color | tee "plan_${ENV}.txt"
-            
-            echo "Completed planning for $ENV"
-            echo "=================================="
-          done
-
-      # Configure AWS credentials (needed for the steps above)
-      - name: Configure AWS Credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          role-to-assume: ${{ secrets.ROLE_ARN_DEV }}  # Default role, will be overridden per environment
-          aws-region: us-east-1
-
-      # Notify success/failure
-      - name: Notify on Success
-        if: success()
-        run: echo "Terraform Plan completed successfully for environments: ${{ env.ENVS }}"
-
-      - name: Notify on Failure
-        if: failure()
-        run: echo "Terraform Plan failed for environments: ${{ env.ENVS }}"
+          echo "environments=$ENVS" >> $GITHUB_OUTPUT
+          echo "Final environments to process: $ENVS"
