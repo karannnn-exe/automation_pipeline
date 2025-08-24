@@ -3,6 +3,10 @@ name: Terraform Plan
 on:
   workflow_dispatch:
     inputs:
+      branch:
+        description: 'Enter the branch to run Terraform Plan'
+        required: true
+        default: main
       environment:
         description: 'Environment to plan (dev, preprod, prod)'
         required: true
